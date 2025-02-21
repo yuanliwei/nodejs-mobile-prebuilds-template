@@ -1,11 +1,11 @@
 FROM ubuntu:24.04
 
+# 基础系统配置
 RUN cat /etc/os-release \
-    && apt-get update  \
-    && apt-get install -y --reinstall ca-certificates  \
+    && apt-get update \
+    && apt-get install -y --reinstall ca-certificates \
     && update-ca-certificates \
     && sed -i 's/http:\/\/archive.ubuntu.com/https:\/\/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources \
-    && cat /etc/apt/sources.list.d/ubuntu.sources \
     && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo Asia/Shanghai > /etc/timezone \
     && apt-get update \
@@ -14,68 +14,57 @@ RUN cat /etc/os-release \
     curl \
     wget \
     xz-utils \
+    unzip \
+    build-essential \
+    python3 \
+    python3-pip \
+    git \
     --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/* 
+    && rm -rf /var/lib/apt/lists/*
 
-# install nodejs
+# 安装指定版本Node.js
 RUN wget https://mirrors.aliyun.com/nodejs-release/v22.6.0/node-v22.6.0-linux-x64.tar.xz \
     && tar -xJf node-v22.6.0-linux-x64.tar.xz \
-    && rm -rf node-v22.6.0-linux-x64.tar.xz \
-    && mv node-v22.6.0-linux-x64 /usr/local/node
+    && mv node-v22.6.0-linux-x64 /usr/local/node \
+    && rm node-v22.6.0-linux-x64.tar.xz
 
 ENV PATH="/usr/local/node/bin:$PATH"
 
-# Create app directory
-WORKDIR /usr/project/app
+# 安装Android NDK r27c
+RUN wget https://googledownloads.cn/android/repository/android-ndk-r27c-linux.zip \
+    && unzip android-ndk-r27c-linux.zip -d /usr/local \
+    && mv /usr/local/android-ndk-r27c /usr/local/android-ndk \
+    && rm android-ndk-r27c-linux.zip
 
-# 配置Android环境 编译出 android-arm64 平台的 /node_modules/sqlite3/lib/binding/napi-v6-android-unknown-arm64/node_sqlite3.node 文件
+ENV ANDROID_NDK_HOME=/usr/local/android-ndk
+ENV PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
 
-# Install Android NDK
-# RUN wget https://dl.google.com/android/repository/android-ndk-r25c-linux-x86_64.zip \
-RUN wget https://googledownloads.cn/android/repository/android-ndk-r27c-linux.zip
+# 配置npm镜像源
+RUN npm config set registry https://registry.npmmirror.com/
 
-# RUN unzip android-ndk-r27c-linux.zip -d /usr/local
+# 安装编译依赖
+RUN npm install -g node-gyp
 
-# RUN mv /usr/local/android-ndk-r27c /usr/local/android-ndk
+# 创建工作目录
+WORKDIR /app
 
-# ENV ANDROID_NDK_HOME=/usr/local/android-ndk
-# ENV PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+# 编译sqlite3的Android arm64版本
+RUN npm pack sqlite3@5.1.6 | xargs tar -zxvf \
+    && cd package && npm install --ignore-scripts \
+    && CC=aarch64-linux-android21-clang \
+    CXX=aarch64-linux-android21-clang++ \
+    node-gyp rebuild \
+        --target=22.6.0 \
+        --arch=arm64 \
+        --platform=android \
+        --dist-url=https://mirrors.aliyun.com/nodejs-release/ \
+        --verbose \
+        --module_name=node_sqlite3 \
+        --module_path=./output/aarch64/
 
-# # Install node-gyp
-# RUN npm install -g node-gyp
-
-# # Install sqlite3 and build for android-arm64
-# RUN npm init -y \
-#     && npm install sqlite3@5.1.6 \
-#     && node-gyp rebuild --target=22.6.0 --arch=arm64 --platform=android --dist-url=https://mirrors.aliyun.com/nodejs-release/ --verbose
-
-#  podman build .\Dockerfile -t node-android 
-
-RUN apt install -y unzip
-RUN unzip android-ndk-r27c-linux.zip
-RUN mv /usr/local/android-ndk-r27c /usr/local/android-ndk
-RUN mv android-ndk-r27c/ /usr/local/android-ndk
-
-export ANDROID_NDK_HOME=/usr/local/android-ndk
-export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-
-npm config set registry https://registry.npmmirror.com/
-npm install -g node-gyp
-
-apt install -y unzip build-essential python3 python3-pip git 
-
-npm init -y
-npm install sqlite3@5.1.6
-
-cd /usr/project/app/node_modules/sqlite3
-
-node-gyp rebuild --target=22.6.0 --arch=arm64 --platform=android --dist-url=https://mirrors.aliyun.com/nodejs-release/ --verbose
-
-# RUN npm init -y \
-#     && npm install sqlite3@5.1.6 \
-#     && node-gyp rebuild --target=22.6.0 --arch=arm64 --platform=android --dist-url=https://mirrors.aliyun.com/nodejs-release/ --verbose
-
-node-gyp rebuild --target=22.6.0 --arch=arm64 --platform=android --dist-url=https://mirrors.aliyun.com/nodejs-release/ --verbose --module_name=sqlite3 --module_path=sqlite3-path
-
-# podman run -it --name node-android -d node-android
-# podman exec -it node-android /bin/bash
+# podman build . -f ./Dockerfile -t node-android
+## podman run -it --name node-android -d node-android
+## podman exec -it node-android /bin/bash
+# podman create --name temp node-android
+# podman cp temp:/app/package ./
+# podman rm temp
